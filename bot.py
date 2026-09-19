@@ -1,7 +1,6 @@
 import os
 import json
 import asyncio
-import random
 import re
 import discord
 from discord.ext import commands, tasks
@@ -38,32 +37,17 @@ BLACKLIST = [
     "siegheil", "heilhitler", "hakenkreuz"
 ]
 
-# --- DATA PERSISTENCE (XP & WARNS) ---
-xp_data = {}
+# --- DATA PERSISTENCE (WARNS) ---
 warns_data = {}
 
 def load_data():
-    global xp_data, warns_data
-    if os.path.exists("levels.json"):
-        try:
-            with open("levels.json", "r") as f:
-                xp_data = json.load(f)
-        except Exception as e:
-            print(f"Fehler beim Laden von levels.json: {e}")
-
+    global warns_data
     if os.path.exists("warns.json"):
         try:
             with open("warns.json", "r") as f:
                 warns_data = json.load(f)
         except Exception as e:
             print(f"Fehler beim Laden von warns.json: {e}")
-
-def save_xp():
-    try:
-        with open("levels.json", "w") as f:
-            json.dump(xp_data, f, indent=4)
-    except Exception as e:
-        print(f"Fehler beim Speichern von levels.json: {e}")
 
 def save_warns():
     try:
@@ -192,7 +176,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # 1. AUTO-MOD (BLACK FILTER MIT BYPASS-SCHUTZ)
+    # AUTO-MOD (BLACK FILTER MIT BYPASS-SCHUTZ)
     cleaned_content = re.sub(r'[^a-zA-Z0-9]', '', message.content.lower())
     if any(word in cleaned_content for word in BLACKLIST):
         try:
@@ -206,23 +190,6 @@ async def on_message(message):
         except Exception as e:
             await message.channel.send(f"⚠️ **{message.author.mention}** hat verbotene Wörter genutzt, konnte aber nicht gekickt werden.")
         return
-
-    # 2. XP SYSTEM
-    user_id = str(message.author.id)
-    if user_id not in xp_data:
-        xp_data[user_id] = {"xp": 0, "level": 1}
-
-    xp_data[user_id]["xp"] += random.randint(10, 20)
-    current_xp = xp_data[user_id]["xp"]
-    current_level = xp_data[user_id]["level"]
-
-    next_level_xp = current_level * 100
-    if current_xp >= next_level_xp:
-        xp_data[user_id]["level"] += 1
-        save_xp()
-        await message.channel.send(f"🎉 Gratulation {message.author.mention}, du bist jetzt **Level {current_level + 1}**!")
-    else:
-        save_xp()
 
     await bot.process_commands(message)
 
@@ -241,7 +208,6 @@ async def show_commands(ctx):
         value=(
             "`!commands` / `!help` – Zeigt diese Befehlsübersicht an.\n"
             "`!ping` – Prüft die aktuelle Latenz des Bots.\n"
-            "`!rank [@User]` – Zeigt dein Level & deine Gesamt-XP an.\n"
             "`!socials` – Zeigt das Social-Media Embed mit Anklick-Buttons."
         ),
         inline=False
@@ -272,7 +238,6 @@ async def show_commands(ctx):
         value=(
             "• **Auto-Mod Filter:** Löscht rassistische Wörter automatisch und kickt den Absender.\n"
             "• **Twitch Live-Alerts:** Benachrichtigt den Server automatisch bei Live-Streams (inkl. Link).\n"
-            "• **XP-System:** Vergibt beim Schreiben im Chat automatisch Level-Punkte.\n"
             "• **Auto-Rolle:** Gibt neuen Mitgliedern beim Beitritt automatisch eine Rolle."
         ),
         inline=False
@@ -299,17 +264,6 @@ async def socials(ctx):
 @bot.command()
 async def ping(ctx):
     await ctx.send(f"🏓 Pong! Latenz: {round(bot.latency * 1000)}ms")
-
-@bot.command()
-async def rank(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    user_id = str(member.id)
-    if user_id in xp_data:
-        lvl = xp_data[user_id]["level"]
-        xp = xp_data[user_id]["xp"]
-        await ctx.send(f"📊 **{member.display_name}** ist Level **{lvl}** ({xp} XP total).")
-    else:
-        await ctx.send(f"📊 **{member.display_name}** hat noch keine XP gesammelt.")
 
 # --- WARN COMMANDS ---
 @bot.command()
