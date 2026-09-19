@@ -129,16 +129,22 @@ async def check_twitch_live():
                         stream_info = stream_data[0]
                         channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
                         if channel:
+                            stream_url = f"https://twitch.tv/{TWITCH_CHANNEL}"
+                            
                             embed = discord.Embed(
-                                title=f"🔴 {TWITCH_CHANNEL} ist jetzt LIVE auf Twitch!",
-                                description=stream_info.get("title", "Kommt vorbei!"),
+                                title=f"🔴 {TWITCH_CHANNEL} ist jetzt LIVE!",
+                                description=f"**{stream_info.get('title', 'Komm rein!')}**\n\n👉 [Jetzt Stream gucken!]({stream_url})",
                                 color=0x9146FF,
-                                url=f"https://twitch.tv/{TWITCH_CHANNEL}"
+                                url=stream_url
                             )
-                            embed.set_field(name="Kategorie", value=stream_info.get("game_name", "Unbekannt"))
+                            embed.add_field(name="Kategorie / Game", value=stream_info.get("game_name", "Unbekannt"), inline=True)
                             embed.set_image(url=stream_info.get("thumbnail_url", "").format(width=1280, height=720))
-                            embed.set_footer(text="Murhat Bot • Twitch Notification")
-                            await channel.send(content="@everyone Der Stream startet jetzt!", embed=embed)
+                            embed.set_footer(text="Murhat Bot • Twitch Live Notification")
+                            
+                            await channel.send(
+                                content=f"🚨 @everyone **{TWITCH_CHANNEL}** ist jetzt live! Schaut vorbei: {stream_url}",
+                                embed=embed
+                            )
 
                     elif not stream_data and is_live:
                         is_live = False
@@ -265,7 +271,7 @@ async def show_commands(ctx):
         name="⚙️ Automatische Features (ohne Befehl)",
         value=(
             "• **Auto-Mod Filter:** Löscht rassistische Wörter automatisch und kickt den Absender.\n"
-            "• **Twitch Live-Alerts:** Benachrichtigt den Server automatisch bei Live-Streams.\n"
+            "• **Twitch Live-Alerts:** Benachrichtigt den Server automatisch bei Live-Streams (inkl. Link).\n"
             "• **XP-System:** Vergibt beim Schreiben im Chat automatisch Level-Punkte.\n"
             "• **Auto-Rolle:** Gibt neuen Mitgliedern beim Beitritt automatisch eine Rolle."
         ),
