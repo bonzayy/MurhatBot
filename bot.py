@@ -29,7 +29,7 @@ intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-bot.remove_command("help")  # Standard-Help deaktivieren für eigenes Embed
+bot.remove_command("help")  # Standard-Help deaktivieren für eigene Übersicht
 
 # --- BLACKLIST (Rassismus / Extremismus) ---
 BLACKLIST = [
@@ -166,6 +166,7 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member):
+    # Auto-Rolle vergeben
     if AUTO_ROLE_ID != 0:
         role = member.guild.get_role(AUTO_ROLE_ID)
         if role:
@@ -174,16 +175,11 @@ async def on_member_join(member):
             except Exception as e:
                 print(f"Konnte Auto-Rolle nicht vergeben: {e}")
 
+    # Willkommensnachricht im festgelegten Welcome-Kanal
     if NOTIFICATION_CHANNEL_ID != 0:
         channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
         if channel:
-            embed = discord.Embed(
-                title="👋 Willkommen auf dem Server!",
-                description=f"Hey {member.mention}, schön dass du am Start bist!",
-                color=0x3498DB
-            )
-            embed.set_thumbnail(url=member.display_avatar.url)
-            await channel.send(embed=embed)
+            await channel.send(f"Was geht {member.mention} du junkie")
 
 @bot.event
 async def on_message(message):
@@ -225,24 +221,57 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # --- BOT COMMANDS ---
-@bot.command()
-async def help(ctx):
-    """Zeigt eine Übersicht aller verfügbaren Befehle."""
+@bot.command(name="commands", aliases=["help"])
+async def show_commands(ctx):
+    """Zeigt eine detaillierte Übersicht aller verfügbaren Befehle an."""
     embed = discord.Embed(
         title="🤖 Murhat Bot – Befehlsübersicht",
-        description="Hier findest du alle verfügbaren Befehle:",
+        description="Hier ist eine Übersicht aller Befehle, wie du sie nutzt und wofür sie da sind:",
         color=0x3498DB
     )
+    
     embed.add_field(
         name="📊 Allgemeine Befehle",
-        value="`!help` - Zeigt diese Hilfe an.\n`!ping` - Prüft die Bot-Latenz.\n`!rank` - Zeigt dein Level & XP an.\n`!socials` - Zeigt alle Social Media Links an.",
+        value=(
+            "`!commands` / `!help` – Zeigt diese Befehlsübersicht an.\n"
+            "`!ping` – Prüft die aktuelle Latenz des Bots.\n"
+            "`!rank [@User]` – Zeigt dein Level & deine Gesamt-XP an.\n"
+            "`!socials` – Zeigt das Social-Media Embed mit Anklick-Buttons."
+        ),
         inline=False
     )
+    
     embed.add_field(
-        name="🛡️ Moderation & Verwaltung",
-        value="`!warn @User [Grund]` - Verwarnt ein Mitglied.\n`!warnings @User` - Zeigt Verwarnungen an.\n`!clearwarns @User` - Löscht alle Warns.\n`!clear <Anzahl>` - Löscht Chat-Nachrichten.\n`!kick @User [Grund]` - Kickt ein Mitglied.\n`!ban @User [Grund]` - Bannt ein Mitglied.",
+        name="⚠️ Verwarnungssystem",
+        value=(
+            "`!warn @User [Grund]` – Verwarnt ein Mitglied (ab 3 Warns erfolgt ein Kick).\n"
+            "`!warnings [@User]` – Zeigt alle bisherigen Verwarnungen an.\n"
+            "`!clearwarns @User` – Setzt alle Verwarnungen eines Mitglieds auf 0 zurück *(Admin)*."
+        ),
         inline=False
     )
+    
+    embed.add_field(
+        name="🛡️ Moderation & Server-Schutz",
+        value=(
+            "`!clear <Anzahl>` – Löscht Chat-Nachrichten *(Mod)*.\n"
+            "`!kick @User [Grund]` – Kickt ein Mitglied vom Server *(Mod)*.\n"
+            "`!ban @User [Grund]` – Bannt ein Mitglied dauerhaft vom Server *(Mod)*."
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="⚙️ Automatische Features (ohne Befehl)",
+        value=(
+            "• **Auto-Mod Filter:** Löscht rassistische Wörter automatisch und kickt den Absender.\n"
+            "• **Twitch Live-Alerts:** Benachrichtigt den Server automatisch bei Live-Streams.\n"
+            "• **XP-System:** Vergibt beim Schreiben im Chat automatisch Level-Punkte.\n"
+            "• **Auto-Rolle:** Gibt neuen Mitgliedern beim Beitritt automatisch eine Rolle."
+        ),
+        inline=False
+    )
+
     embed.set_footer(text="Murhat Bot • Community Management")
     await ctx.send(embed=embed)
 
