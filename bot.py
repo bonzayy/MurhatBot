@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import random
 import re
 import discord
 from discord.ext import commands, tasks
@@ -28,7 +29,7 @@ intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-bot.remove_command("help")  # Standard-Help deaktivieren für eigene Übersicht
+bot.remove_command("help")
 
 # --- BLACKLIST (Rassismus / Extremismus) ---
 BLACKLIST = [
@@ -58,12 +59,32 @@ def save_warns():
 
 load_data()
 
-# --- TWITCH HELIX API ---
+# --- UI VIEWS (BUTTONS FÜR TWITCH-NOTIFICATION) ---
+class TwitchStreamView(discord.ui.View):
+    def __init__(self, stream_url):
+        super().__init__()
+        self.add_item(discord.ui.Button(
+            label="Watch Stream",
+            url=stream_url,
+            style=discord.ButtonStyle.link,
+            emoji="📺"
+        ))
+
+class SocialsView(discord.ui.View):
+    def __init__(self):
+        super().__init__()
+        self.add_item(discord.ui.Button(label="YouTube", url="https://youtube.com", style=discord.ButtonStyle.link, emoji="🔴"))
+        self.add_item(discord.ui.Button(label="Twitch", url=f"https://twitch.tv/{TWITCH_CHANNEL}" if TWITCH_CHANNEL else "https://twitch.tv", style=discord.ButtonStyle.link, emoji="💜"))
+        self.add_item(discord.ui.Button(label="TikTok", url="https://tiktok.com", style=discord.ButtonStyle.link, emoji="🎵"))
+        self.add_item(discord.ui.Button(label="Instagram", url="https://instagram.com", style=discord.ButtonStyle.link, emoji="📸"))
+
+# --- TWITCH HELIX API & LOOP ---
 twitch_token = None
 is_live = False
 
 async def get_twitch_token():
     if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
+        print("❌ FEHLER: TWITCH_CLIENT_ID oder TWITCH_CLIENT_SECRET fehlt!")
         return None
     url = "https://id.twitch.tv/oauth2/token"
     params = {
@@ -77,11 +98,13 @@ async def get_twitch_token():
                 if resp.status == 200:
                     data = await resp.json()
                     return data.get("access_token")
+                else:
+                    print(f"❌ Twitch Token API Fehler Status: {resp.status}")
     except Exception as e:
         print(f"Twitch Token Fehler: {e}")
     return None
 
-@tasks.loop(minutes=2)
+@tasks.loop(minutes=1)
 async def check_twitch_live():
     global twitch_token, is_live
     if not TWITCH_CLIENT_ID or not TWITCH_CHANNEL or NOTIFICATION_CHANNEL_ID == 0:
@@ -112,37 +135,46 @@ async def check_twitch_live():
                         is_live = True
                         stream_info = stream_data[0]
                         channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
+                        
                         if channel:
                             stream_url = f"https://twitch.tv/{TWITCH_CHANNEL}"
+                            title = stream_info.get("title", "Komm rein!")
                             
+                            # Profilbild des Twitch-Users abrufen
+                            avatar_url = ""
+                            user_url = f"https://api.twitch.tv/helix/users?login={TWITCH_CHANNEL}"
+                            async with session.get(user_url, headers=headers) as u_resp:
+                                if u_resp.status == 200:
+                                    u_data = await u_resp.json()
+                                    if u_data.get("data"):
+                                        avatar_url = u_data["data"][0].get("profile_image_url", "")
+
+                            # Embed exact wie NotifyMe
                             embed = discord.Embed(
-                                title=f"🔴 {TWITCH_CHANNEL} ist jetzt LIVE!",
-                                description=f"**{stream_info.get('title', 'Komm rein!')}**\n\n👉 [Jetzt Stream gucken!]({stream_url})",
-                                color=0x9146FF,
-                                url=stream_url
+                                title=title,
+                                url=stream_url,
+                                color=0x9146FF
                             )
-                            embed.add_field(name="Kategorie / Game", value=stream_info.get("game_name", "Unbekannt"), inline=True)
-                            embed.set_image(url=stream_info.get("thumbnail_url", "").format(width=1280, height=720))
-                            embed.set_footer(text="Murhat Bot • Twitch Live Notification")
-                            
+                            if avatar_url:
+                                embed.set_author(name=TWITCH_CHANNEL, icon_url=avatar_url, url=stream_url)
+                            else:
+                                embed.set_author(name=TWITCH_CHANNEL, url=stream_url)
+
+                            thumb_url = stream_info.get("thumbnail_url", "").format(width=1280, height=720)
+                            if thumb_url:
+                                embed.set_image(url=f"{thumb_url}?r={random.randint(1, 10000)}")
+
+                            # Nachricht schickt direkt den @everyone Tag + Stream-Link oben im Text!
                             await channel.send(
-                                content=f"🚨 @everyone **{TWITCH_CHANNEL}** ist jetzt live! Schaut vorbei: {stream_url}",
-                                embed=embed
+                                content=f"@everyone\n**{TWITCH_CHANNEL}** Ich bin jetzt Live komm ran!\n{stream_url}",
+                                embed=embed,
+                                view=TwitchStreamView(stream_url)
                             )
 
                     elif not stream_data and is_live:
                         is_live = False
     except Exception as e:
         print(f"Fehler beim Twitch-Loop: {e}")
-
-# --- UI VIEWS (BUTTONS) ---
-class SocialsView(discord.ui.View):
-    def __init__(self):
-        super().__init__()
-        self.add_item(discord.ui.Button(label="YouTube", url="https://youtube.com", style=discord.ButtonStyle.link, emoji="🔴"))
-        self.add_item(discord.ui.Button(label="Twitch", url=f"https://twitch.tv/{TWITCH_CHANNEL}" if TWITCH_CHANNEL else "https://twitch.tv", style=discord.ButtonStyle.link, emoji="💜"))
-        self.add_item(discord.ui.Button(label="TikTok", url="https://tiktok.com", style=discord.ButtonStyle.link, emoji="🎵"))
-        self.add_item(discord.ui.Button(label="Instagram", url="https://instagram.com", style=discord.ButtonStyle.link, emoji="📸"))
 
 # --- EVENTS ---
 @bot.event
@@ -156,7 +188,6 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member):
-    # Auto-Rolle vergeben
     if AUTO_ROLE_ID != 0:
         role = member.guild.get_role(AUTO_ROLE_ID)
         if role:
@@ -165,7 +196,6 @@ async def on_member_join(member):
             except Exception as e:
                 print(f"Konnte Auto-Rolle nicht vergeben: {e}")
 
-    # Willkommensnachricht im festgelegten Welcome-Kanal
     if NOTIFICATION_CHANNEL_ID != 0:
         channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
         if channel:
@@ -176,7 +206,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # AUTO-MOD (BLACK FILTER MIT BYPASS-SCHUTZ)
+    # AUTO-MOD
     cleaned_content = re.sub(r'[^a-zA-Z0-9]', '', message.content.lower())
     if any(word in cleaned_content for word in BLACKLIST):
         try:
@@ -196,10 +226,9 @@ async def on_message(message):
 # --- BOT COMMANDS ---
 @bot.command(name="commands", aliases=["help"])
 async def show_commands(ctx):
-    """Zeigt eine detaillierte Übersicht aller verfügbaren Befehle an."""
     embed = discord.Embed(
         title="🤖 Murhat Bot – Befehlsübersicht",
-        description="Hier ist eine Übersicht aller Befehle, wie du sie nutzt und wofür sie da sind:",
+        description="Hier ist eine Übersicht aller Befehle:",
         color=0x3498DB
     )
     
@@ -218,7 +247,7 @@ async def show_commands(ctx):
         value=(
             "`!warn @User [Grund]` – Verwarnt ein Mitglied (ab 3 Warns erfolgt ein Kick).\n"
             "`!warnings [@User]` – Zeigt alle bisherigen Verwarnungen an.\n"
-            "`!clearwarns @User` – Setzt alle Verwarnungen eines Mitglieds auf 0 zurück *(Admin)*."
+            "`!clearwarns @User` – Setzt alle Verwarnungen zurück *(Admin)*."
         ),
         inline=False
     )
@@ -232,23 +261,12 @@ async def show_commands(ctx):
         ),
         inline=False
     )
-    
-    embed.add_field(
-        name="⚙️ Automatische Features (ohne Befehl)",
-        value=(
-            "• **Auto-Mod Filter:** Löscht rassistische Wörter automatisch und kickt den Absender.\n"
-            "• **Twitch Live-Alerts:** Benachrichtigt den Server automatisch bei Live-Streams (inkl. Link).\n"
-            "• **Auto-Rolle:** Gibt neuen Mitgliedern beim Beitritt automatisch eine Rolle."
-        ),
-        inline=False
-    )
 
     embed.set_footer(text="Murhat Bot • Community Management")
     await ctx.send(embed=embed)
 
 @bot.command()
 async def socials(ctx):
-    """Zeigt ein Embed mit Social Media Links und Klick-Buttons."""
     embed = discord.Embed(
         title="🔥 Unsere Socials & Netzwerke",
         description="Verpasse keinen Stream, kein Video und keinen Content mehr!",
