@@ -13,11 +13,19 @@ TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 TWITCH_CHANNEL = os.getenv("TWITCH_CHANNEL")
 
+# Kanal für Twitch-Live-Alerts (akzeptiert TWITCH_CHANNEL_ID oder NOTIFICATION_CHANNEL_ID)
 try:
-    NOTIFICATION_CHANNEL_ID = int(os.getenv("NOTIFICATION_CHANNEL_ID", "0"))
+    TWITCH_CHANNEL_ID = int(os.getenv("TWITCH_CHANNEL_ID", os.getenv("NOTIFICATION_CHANNEL_ID", "0")))
 except ValueError:
-    NOTIFICATION_CHANNEL_ID = 0
+    TWITCH_CHANNEL_ID = 0
 
+# Kanal für Willkommensnachrichten
+try:
+    WELCOME_CHANNEL_ID = int(os.getenv("WELCOME_CHANNEL_ID", "0"))
+except ValueError:
+    WELCOME_CHANNEL_ID = 0
+
+# Auto-Rolle bei Server-Beitritt
 try:
     AUTO_ROLE_ID = int(os.getenv("AUTO_ROLE_ID", "0"))
 except ValueError:
@@ -107,7 +115,7 @@ async def get_twitch_token():
 @tasks.loop(minutes=1)
 async def check_twitch_live():
     global twitch_token, is_live
-    if not TWITCH_CLIENT_ID or not TWITCH_CHANNEL or NOTIFICATION_CHANNEL_ID == 0:
+    if not TWITCH_CLIENT_ID or not TWITCH_CHANNEL or TWITCH_CHANNEL_ID == 0:
         return
 
     if not twitch_token:
@@ -134,8 +142,16 @@ async def check_twitch_live():
                     if stream_data and not is_live:
                         is_live = True
                         stream_info = stream_data[0]
-                        channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
                         
+                        # Kanal per Cache oder API-Fetch laden
+                        channel = bot.get_channel(TWITCH_CHANNEL_ID)
+                        if not channel:
+                            try:
+                                channel = await bot.fetch_channel(TWITCH_CHANNEL_ID)
+                            except Exception as fetch_err:
+                                print(f"❌ Konnte Kanal {TWITCH_CHANNEL_ID} nicht laden: {fetch_err}")
+                                channel = None
+
                         if channel:
                             stream_url = f"https://twitch.tv/{TWITCH_CHANNEL}"
                             title = stream_info.get("title", "Komm rein!")
@@ -149,7 +165,7 @@ async def check_twitch_live():
                                     if u_data.get("data"):
                                         avatar_url = u_data["data"][0].get("profile_image_url", "")
 
-                            # Embed exact wie NotifyMe
+                            # Embed exact wie bei NotifyMe
                             embed = discord.Embed(
                                 title=title,
                                 url=stream_url,
@@ -164,7 +180,7 @@ async def check_twitch_live():
                             if thumb_url:
                                 embed.set_image(url=f"{thumb_url}?r={random.randint(1, 10000)}")
 
-                            # Nachricht schickt direkt den @everyone Tag + Stream-Link oben im Text!
+                            # Nachrichtenversand in den festgelegten Twitch-Kanal
                             await channel.send(
                                 content=f"@everyone\n**{TWITCH_CHANNEL}** Ich bin jetzt Live komm ran!\n{stream_url}",
                                 embed=embed,
@@ -188,6 +204,7 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member):
+    # Auto-Rolle vergeben
     if AUTO_ROLE_ID != 0:
         role = member.guild.get_role(AUTO_ROLE_ID)
         if role:
@@ -196,8 +213,14 @@ async def on_member_join(member):
             except Exception as e:
                 print(f"Konnte Auto-Rolle nicht vergeben: {e}")
 
-    if NOTIFICATION_CHANNEL_ID != 0:
-        channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
+    # Willkommensnachricht (nur im festgelegten Welcome-Kanal)
+    if WELCOME_CHANNEL_ID != 0:
+        channel = bot.get_channel(WELCOME_CHANNEL_ID)
+        if not channel:
+            try:
+                channel = await bot.fetch_channel(WELCOME_CHANNEL_ID)
+            except Exception:
+                channel = None
         if channel:
             await channel.send(f"Was geht {member.mention} du junkie")
 
@@ -237,7 +260,8 @@ async def show_commands(ctx):
         value=(
             "`!commands` / `!help` – Zeigt diese Befehlsübersicht an.\n"
             "`!ping` – Prüft die aktuelle Latenz des Bots.\n"
-            "`!socials` – Zeigt das Social-Media Embed mit Anklick-Buttons."
+            "`!socials` – Zeigt das Social-Media Embed mit Anklick-Buttons.\n"
+            "`!testlive` – Sendet manuell eine Test-Streaming-Benachrichtigung."
         ),
         inline=False
     )
@@ -264,6 +288,33 @@ async def show_commands(ctx):
 
     embed.set_footer(text="Murhat Bot • Community Management")
     await ctx.send(embed=embed)
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def testlive(ctx):
+    """Befehl zum manuellen Testen des Twitch-Alerts"""
+    channel = bot.get_channel(TWITCH_CHANNEL_ID)
+    if not channel:
+        try:
+            channel = await bot.fetch_channel(TWITCH_CHANNEL_ID)
+        except Exception as e:
+            await ctx.send(f"❌ Fehler beim Laden von Kanal-ID `{TWITCH_CHANNEL_ID}`: {e}")
+            return
+
+    stream_url = f"https://twitch.tv/{TWITCH_CHANNEL}"
+    embed = discord.Embed(
+        title="TEST: Stream ist jetzt live!",
+        url=stream_url,
+        color=0x9146FF
+    )
+    embed.set_author(name=TWITCH_CHANNEL, url=stream_url)
+    
+    await channel.send(
+        content=f"@everyone\n**{TWITCH_CHANNEL}** Ich bin jetzt Live komm ran!\n{stream_url}",
+        embed=embed,
+        view=TwitchStreamView(stream_url)
+    )
+    await ctx.send(f"✅ Test-Benachrichtigung gesendet in: <#{TWITCH_CHANNEL_ID}>")
 
 @bot.command()
 async def socials(ctx):
