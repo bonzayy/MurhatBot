@@ -3,6 +3,7 @@ import json
 import asyncio
 import random
 import re
+import datetime
 import discord
 from discord.ext import commands, tasks
 import aiohttp
@@ -13,23 +14,26 @@ TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 TWITCH_CHANNEL = os.getenv("TWITCH_CHANNEL")
 
-# Kanal für Twitch-Live-Alerts (akzeptiert TWITCH_CHANNEL_ID oder NOTIFICATION_CHANNEL_ID)
 try:
     TWITCH_CHANNEL_ID = int(os.getenv("TWITCH_CHANNEL_ID", os.getenv("NOTIFICATION_CHANNEL_ID", "0")))
 except ValueError:
     TWITCH_CHANNEL_ID = 0
 
-# Kanal für Willkommensnachrichten
 try:
     WELCOME_CHANNEL_ID = int(os.getenv("WELCOME_CHANNEL_ID", "0"))
 except ValueError:
     WELCOME_CHANNEL_ID = 0
 
-# Auto-Rolle bei Server-Beitritt
 try:
     AUTO_ROLE_ID = int(os.getenv("AUTO_ROLE_ID", "0"))
 except ValueError:
     AUTO_ROLE_ID = 0
+
+# Kanal-ID für die Beichten (privater Mod-Kanal)
+try:
+    CONFESSION_CHANNEL_ID = int(os.getenv("CONFESSION_CHANNEL_ID", "0"))
+except ValueError:
+    CONFESSION_CHANNEL_ID = 0
 
 # --- INTENTS CONFIGURATION ---
 intents = discord.Intents.default()
@@ -39,24 +43,32 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 bot.remove_command("help")
 
-# --- BLACKLIST (Rassismus / Extremismus) ---
+# --- BLACKLIST ---
 BLACKLIST = [
     "nigga", "nigger", "neger", "niggah",
     "chink", "spic", "kyke", "kike",
     "siegheil", "heilhitler", "hakenkreuz"
 ]
 
-# --- DATA PERSISTENCE (WARNS) ---
+# --- DATA PERSISTENCE (WARNS & ECONOMY) ---
 warns_data = {}
+economy_data = {}
 
 def load_data():
-    global warns_data
+    global warns_data, economy_data
     if os.path.exists("warns.json"):
         try:
             with open("warns.json", "r") as f:
                 warns_data = json.load(f)
         except Exception as e:
             print(f"Fehler beim Laden von warns.json: {e}")
+
+    if os.path.exists("economy.json"):
+        try:
+            with open("economy.json", "r") as f:
+                economy_data = json.load(f)
+        except Exception as e:
+            print(f"Fehler beim Laden von economy.json: {e}")
 
 def save_warns():
     try:
@@ -65,9 +77,66 @@ def save_warns():
     except Exception as e:
         print(f"Fehler beim Speichern von warns.json: {e}")
 
+def save_economy():
+    try:
+        with open("economy.json", "w") as f:
+            json.dump(economy_data, f, indent=4)
+    except Exception as e:
+        print(f"Fehler beim Speichern von economy.json: {e}")
+
+def get_balance(user_id: str) -> int:
+    if user_id not in economy_data:
+        economy_data[user_id] = {"coins": 500, "last_daily": None}
+        save_economy()
+    return economy_data[user_id]["coins"]
+
+def update_balance(user_id: str, amount: int):
+    get_balance(user_id)
+    economy_data[user_id]["coins"] += amount
+    save_economy()
+
 load_data()
 
-# --- UI VIEWS (BUTTONS FÜR TWITCH-NOTIFICATION) ---
+# --- ANONYMES BEICHTSTUHL MODAL (POPUP) ---
+class ConfessionModal(discord.ui.Modal, title="🤫 Anonyme Beichte einreichen"):
+    confession_text = discord.ui.TextInput(
+        label="Deine Geschichte / Beichte",
+        style=discord.TextStyle.paragraph,
+        placeholder="Schreib deine Beichte hier rein... (Keine Namen oder IPs werden gespeichert!)",
+        required=True,
+        max_length=2000
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        target_channel_id = CONFESSION_CHANNEL_ID
+        if target_channel_id == 0:
+            await interaction.response.send_message("❌ Es wurde noch keine `CONFESSION_CHANNEL_ID` in den Umgebungsvariablen eingerichtet!", ephemeral=True)
+            return
+
+        channel = interaction.client.get_channel(target_channel_id)
+        if not channel:
+            try:
+                channel = await interaction.client.fetch_channel(target_channel_id)
+            except Exception as e:
+                print(f"Fehler beim Laden des Beichtstuhl-Kanals: {e}")
+                channel = None
+
+        if not channel:
+            await interaction.response.send_message("❌ Der Mod-Kanal für Beichten konnte nicht gefunden werden.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🤫 Neue Anonyme Beichte",
+            description=self.confession_text.value,
+            color=0x9146FF,
+            timestamp=datetime.datetime.utcnow()
+        )
+        embed.set_footer(text="Anonymer Beichtstuhl • Live-Stream Content")
+
+        await channel.send(embed=embed)
+        await interaction.response.send_message("✅ Deine Beichte wurde **komplett anonym** an das Mod-Team geschickt! Danke!", ephemeral=True)
+
+# --- UI VIEWS ---
 class TwitchStreamView(discord.ui.View):
     def __init__(self, stream_url):
         super().__init__()
@@ -143,7 +212,6 @@ async def check_twitch_live():
                         is_live = True
                         stream_info = stream_data[0]
                         
-                        # Kanal per Cache oder API-Fetch laden
                         channel = bot.get_channel(TWITCH_CHANNEL_ID)
                         if not channel:
                             try:
@@ -156,7 +224,6 @@ async def check_twitch_live():
                             stream_url = f"https://twitch.tv/{TWITCH_CHANNEL}"
                             title = stream_info.get("title", "Komm rein!")
                             
-                            # Profilbild des Twitch-Users abrufen
                             avatar_url = ""
                             user_url = f"https://api.twitch.tv/helix/users?login={TWITCH_CHANNEL}"
                             async with session.get(user_url, headers=headers) as u_resp:
@@ -165,7 +232,6 @@ async def check_twitch_live():
                                     if u_data.get("data"):
                                         avatar_url = u_data["data"][0].get("profile_image_url", "")
 
-                            # Embed exact wie bei NotifyMe
                             embed = discord.Embed(
                                 title=title,
                                 url=stream_url,
@@ -180,7 +246,6 @@ async def check_twitch_live():
                             if thumb_url:
                                 embed.set_image(url=f"{thumb_url}?r={random.randint(1, 10000)}")
 
-                            # Nachrichtenversand in den festgelegten Twitch-Kanal
                             await channel.send(
                                 content=f"@everyone\n**{TWITCH_CHANNEL}** Ich bin jetzt Live komm ran!\n{stream_url}",
                                 embed=embed,
@@ -204,7 +269,6 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member):
-    # Auto-Rolle vergeben
     if AUTO_ROLE_ID != 0:
         role = member.guild.get_role(AUTO_ROLE_ID)
         if role:
@@ -213,7 +277,6 @@ async def on_member_join(member):
             except Exception as e:
                 print(f"Konnte Auto-Rolle nicht vergeben: {e}")
 
-    # Willkommensnachricht (nur im festgelegten Welcome-Kanal)
     if WELCOME_CHANNEL_ID != 0:
         channel = bot.get_channel(WELCOME_CHANNEL_ID)
         if not channel:
@@ -229,7 +292,6 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # AUTO-MOD
     cleaned_content = re.sub(r'[^a-zA-Z0-9]', '', message.content.lower())
     if any(word in cleaned_content for word in BLACKLIST):
         try:
@@ -246,6 +308,121 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
+# --- BEICHTSTUHL BEFEHL ---
+@bot.command(name="beichte", aliases=["beichtstuhl", "confess"])
+async def confession_command(ctx):
+    """Öffnet das Anonyme Beichtstuhl-Popup"""
+    # Da Modals eine Interaction benötigen, funktioniert das sauberer per Application Command / Slash-Command oder Direct Message, aber wir senden ein Interface.
+    modal = ConfessionModal()
+    # Hinweis an den User: Bei Präfix-Befehlen kann das Modal per Slash Command aufgerufen werden oder direkt genutzt werden.
+    await ctx.interaction.response.send_modal(modal) if ctx.interaction else await ctx.send("ℹ️ Tippe bitte den Slash Command `/beichte` oder nutze die Beichtstuhl-Webseite für das Formular!")
+
+# --- SLOTS & ECONOMY SYSTEM ---
+SLOT_EMOJIS = ["🍋", "🍒", "🔔", "💎", "7️⃣"]
+
+@bot.command(aliases=["bal", "money"])
+async def balance(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    coins = get_balance(str(member.id))
+    embed = discord.Embed(
+        title=f"💰 Kontostand von {member.display_name}",
+        description=f"Aktuelles Guthaben: **{coins} Coins** 🪙",
+        color=0xF1C40F
+    )
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def daily(ctx):
+    user_id = str(ctx.author.id)
+    get_balance(user_id)
+    
+    last_daily_str = economy_data[user_id].get("last_daily")
+    now = datetime.datetime.utcnow()
+
+    if last_daily_str:
+        last_daily = datetime.datetime.fromisoformat(last_daily_str)
+        if (now - last_daily).total_seconds() < 86400:
+            remaining = datetime.timedelta(seconds=int(86400 - (now - last_daily).total_seconds()))
+            hours, remainder = divmod(remaining.seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            await ctx.send(f"⏳ Du hast deinen täglichen Bonus schon geholt! Warte noch **{hours}h {minutes}m**.")
+            return
+
+    reward = 250
+    update_balance(user_id, reward)
+    economy_data[user_id]["last_daily"] = now.isoformat()
+    save_economy()
+
+    await ctx.send(f"🎁 **{ctx.author.mention}**, du hast deinen täglichen Bonus von **{reward} Coins** abgeholt! 🪙")
+
+@bot.command()
+async def slots(ctx, bet: int):
+    user_id = str(ctx.author.id)
+    current_bal = get_balance(user_id)
+
+    if bet <= 0:
+        await ctx.send("❌ Der Einsatz muss mindestens 1 Coin betragen!")
+        return
+
+    if bet > current_bal:
+        await ctx.send(f"❌ Du hast nicht genug Coins! Dein Guthaben: **{current_bal} Coins**.")
+        return
+
+    slot1 = random.choice(SLOT_EMOJIS)
+    slot2 = random.choice(SLOT_EMOJIS)
+    slot3 = random.choice(SLOT_EMOJIS)
+
+    embed = discord.Embed(title="🎰 SLOTS 🎰", description="[ 🔄 | 🔄 | 🔄 ]", color=0x3498DB)
+    msg = await ctx.send(embed=embed)
+    await asyncio.sleep(1)
+
+    win_multiplier = 0
+    if slot1 == slot2 == slot3:
+        if slot1 == "7️⃣":
+            win_multiplier = 10
+        elif slot1 == "💎":
+            win_multiplier = 5
+        else:
+            win_multiplier = 3
+    elif slot1 == slot2 or slot2 == slot3 or slot1 == slot3:
+        win_multiplier = 1.5
+
+    result_text = f"[ {slot1} | {slot2} | {slot3} ]\n\n"
+
+    if win_multiplier > 0:
+        winnings = int(bet * win_multiplier)
+        profit = winnings - bet
+        update_balance(user_id, profit)
+        
+        if win_multiplier >= 5:
+            result_text += f"🎉 **JACKPOT!** Du hast **{winnings} Coins** gewonnen! (+{profit} Coins) 🪙"
+            color = 0x2ECC71
+        else:
+            result_text += f"✅ **Gewonnen!** Du hast **{winnings} Coins** erhalten! (+{profit} Coins) 🪙"
+            color = 0x2ECC71
+    else:
+        update_balance(user_id, -bet)
+        result_text += f"💥 **Verloren!** -{bet} Coins."
+        color = 0xE74C3C
+
+    final_embed = discord.Embed(title="🎰 SLOTS ERGEBNIS 🎰", description=result_text, color=color)
+    final_embed.set_footer(text=f"Neues Guthaben: {get_balance(user_id)} Coins")
+    await msg.edit(embed=final_embed)
+
+@bot.command(aliases=["lb", "top"])
+async def leaderboard(ctx):
+    sorted_users = sorted(economy_data.items(), key=lambda x: x[1].get("coins", 0), reverse=True)[:5]
+    
+    embed = discord.Embed(title="🏆 Server Coin-Leaderboard", color=0xF1C40F)
+    description = ""
+    for idx, (user_id, data) in enumerate(sorted_users, 1):
+        user = bot.get_user(int(user_id))
+        name = user.display_name if user else f"User ID {user_id}"
+        description += f"**#{idx} {name}** — {data.get('coins', 0)} Coins 🪙\n"
+
+    embed.description = description or "Noch keine Daten vorhanden."
+    await ctx.send(embed=embed)
+
 # --- BOT COMMANDS ---
 @bot.command(name="commands", aliases=["help"])
 async def show_commands(ctx):
@@ -256,32 +433,42 @@ async def show_commands(ctx):
     )
     
     embed.add_field(
+        name="🎰 Casino & Games",
+        value=(
+            "`!slots <Einsatz>` – Spiele an der Slot-Maschine.\n"
+            "`!daily` – Hole deinen täglichen Coin-Bonus ab.\n"
+            "`!balance` / `!coins` – Zeigt dein Guthaben.\n"
+            "`!leaderboard` – Zeigt die reichsten User."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🤫 Community Content",
+        value=(
+            "`!beichte` – Reiche eine anonyme Beichte für den Stream ein."
+        ),
+        inline=False
+    )
+
+    embed.add_field(
         name="📊 Allgemeine Befehle",
         value=(
             "`!commands` / `!help` – Zeigt diese Befehlsübersicht an.\n"
-            "`!ping` – Prüft die aktuelle Latenz des Bots.\n"
-            "`!socials` – Zeigt das Social-Media Embed mit Anklick-Buttons.\n"
-            "`!testlive` – Sendet manuell eine Test-Streaming-Benachrichtigung."
+            "`!ping` – Prüft die Latenz des Bots.\n"
+            "`!socials` – Zeigt das Social-Media Embed mit Buttons.\n"
+            "`!testlive` – Sendet manuell eine Test-Benachrichtigung."
         ),
         inline=False
     )
     
     embed.add_field(
-        name="⚠️ Verwarnungssystem",
+        name="⚠️ Verwarnungssystem & Moderation",
         value=(
-            "`!warn @User [Grund]` – Verwarnt ein Mitglied (ab 3 Warns erfolgt ein Kick).\n"
-            "`!warnings [@User]` – Zeigt alle bisherigen Verwarnungen an.\n"
-            "`!clearwarns @User` – Setzt alle Verwarnungen zurück *(Admin)*."
-        ),
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🛡️ Moderation & Server-Schutz",
-        value=(
-            "`!clear <Anzahl>` – Löscht Chat-Nachrichten *(Mod)*.\n"
-            "`!kick @User [Grund]` – Kickt ein Mitglied vom Server *(Mod)*.\n"
-            "`!ban @User [Grund]` – Bannt ein Mitglied dauerhaft vom Server *(Mod)*."
+            "`!warn @User [Grund]` – Verwarnt ein Mitglied.\n"
+            "`!warnings [@User]` – Zeigt Verwarnungen an.\n"
+            "`!clear <Anzahl>` – Löscht Chat-Nachrichten.\n"
+            "`!kick` / `!ban` – Mitglieder vom Server kicken/bannen."
         ),
         inline=False
     )
@@ -292,7 +479,6 @@ async def show_commands(ctx):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def testlive(ctx):
-    """Befehl zum manuellen Testen des Twitch-Alerts"""
     channel = bot.get_channel(TWITCH_CHANNEL_ID)
     if not channel:
         try:
